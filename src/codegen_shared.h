@@ -3,6 +3,7 @@
 #include <utility>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/Support/Debug.h>
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/DebugLoc.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/MDBuilder.h>
@@ -235,8 +236,20 @@ static inline void emit_signal_fence(llvm::IRBuilder<> &builder)
 
 static inline void emit_gc_safepoint(llvm::IRBuilder<> &builder, llvm::Value *ptls, llvm::MDNode *tbaa)
 {
+    using namespace llvm;
     emit_signal_fence(builder);
-    builder.CreateLoad(getSizeTy(builder.getContext()), get_current_signal_page_from_ptls(builder, ptls, tbaa), true);
+    Module *M = builder.GetInsertBlock()->getModule();
+    LLVMContext &C = builder.getContext();
+    // inline jlsafepoint_func->realize(M)
+    Function *F = M->getFunction("julia.safepoint");
+    if (!F) {
+        auto T_ppjlvalue = JuliaType::get_ppjlvalue_ty(builder.getContext());
+        FunctionType *FT = FunctionType::get(Type::getVoidTy(C), {T_ppjlvalue}, false);
+        F = Function::Create(FT, Function::ExternalLinkage, "julia.safepoint", M);
+        F->addFnAttr(Attribute::InaccessibleMemOrArgMemOnly);
+    }
+
+    builder.CreateCall(F, {ptls});
     emit_signal_fence(builder);
 }
 
@@ -244,9 +257,9 @@ static inline llvm::Value *emit_gc_state_set(llvm::IRBuilder<> &builder, llvm::V
 {
     using namespace llvm;
     Type *T_int8 = state->getType();
-    ptls = emit_bitcast_with_builder(builder, ptls, builder.getInt8PtrTy());
+    llvm::Value *ptls_i8 = emit_bitcast_with_builder(builder, ptls, builder.getInt8PtrTy());
     Constant *offset = ConstantInt::getSigned(builder.getInt32Ty(), offsetof(jl_tls_states_t, gc_state));
-    Value *gc_state = builder.CreateInBoundsGEP(T_int8, ptls, ArrayRef<Value*>(offset), "gc_state");
+    Value *gc_state = builder.CreateInBoundsGEP(T_int8, ptls_i8, ArrayRef<Value*>(offset), "gc_state");
     if (old_state == nullptr) {
         old_state = builder.CreateLoad(T_int8, gc_state);
         cast<LoadInst>(old_state)->setOrdering(AtomicOrdering::Monotonic);
