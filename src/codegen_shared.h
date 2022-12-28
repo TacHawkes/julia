@@ -237,19 +237,20 @@ static inline void emit_signal_fence(llvm::IRBuilder<> &builder)
 static inline void emit_gc_safepoint(llvm::IRBuilder<> &builder, llvm::Value *ptls, llvm::MDNode *tbaa)
 {
     using namespace llvm;
+    llvm::Value *signal_page = get_current_signal_page_from_ptls(builder, ptls, tbaa);
     emit_signal_fence(builder);
     Module *M = builder.GetInsertBlock()->getModule();
     LLVMContext &C = builder.getContext();
     // inline jlsafepoint_func->realize(M)
     Function *F = M->getFunction("julia.safepoint");
     if (!F) {
-        auto T_ppjlvalue = JuliaType::get_ppjlvalue_ty(builder.getContext());
-        FunctionType *FT = FunctionType::get(Type::getVoidTy(C), {T_ppjlvalue}, false);
+        auto T_size = getSizeTy(builder.getContext());
+        auto T_psize = T_size->getPointerTo();
+        FunctionType *FT = FunctionType::get(Type::getVoidTy(C), {T_psize}, false);
         F = Function::Create(FT, Function::ExternalLinkage, "julia.safepoint", M);
         F->addFnAttr(Attribute::InaccessibleMemOrArgMemOnly);
     }
-
-    builder.CreateCall(F, {ptls});
+    builder.CreateCall(F, {signal_page});
     emit_signal_fence(builder);
 }
 

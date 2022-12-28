@@ -198,8 +198,9 @@ Value *FinalLowerGC::lowerSafepoint(CallInst *target, Function &F)
     assert(target->arg_size() == 1);
     IRBuilder<> builder(target->getContext());
     builder.SetInsertPoint(target);
-    Value* ptls = target->getOperand(0);
-    Value* load = builder.CreateLoad(getSizeTy(builder.getContext()), get_current_signal_page_from_ptls(builder, ptls, nullptr), true);
+    auto T_size = getSizeTy(builder.getContext());
+    Value* signal_page = target->getOperand(0);
+    Value* load = builder.CreateLoad(T_size, signal_page, true);
     return load;
 }
 
@@ -333,6 +334,7 @@ bool FinalLowerGC::runOnFunction(Function &F)
             }
 
             Value *callee = CI->getCalledOperand();
+            assert(callee);
 
             if (callee == newGCFrameFunc) {
                 replaceInstruction(CI, lowerNewGCFrame(CI, F), it);

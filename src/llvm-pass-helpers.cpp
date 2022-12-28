@@ -212,10 +212,12 @@ namespace jl_intrinsics {
     const IntrinsicDescription safepoint(
         SAFEPOINT_NAME,
         [](const JuliaPassContext &context) {
+            auto T_size = getSizeTy(context.getLLVMContext());
+            auto T_psize = T_size->getPointerTo();
             auto intrinsic = Function::Create(
                 FunctionType::get(
                     Type::getVoidTy(context.getLLVMContext()),
-                    {JuliaType::get_ppjlvalue_ty(context.getLLVMContext())},
+                    {T_psize},
                     false),
                 Function::ExternalLinkage,
                 SAFEPOINT_NAME);
