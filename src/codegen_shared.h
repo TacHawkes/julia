@@ -234,7 +234,7 @@ static inline void emit_signal_fence(llvm::IRBuilder<> &builder)
     builder.CreateFence(AtomicOrdering::SequentiallyConsistent, SyncScope::SingleThread);
 }
 
-static inline void emit_gc_safepoint(llvm::IRBuilder<> &builder, llvm::Value *ptls, llvm::MDNode *tbaa)
+static inline void emit_gc_safepoint(llvm::IRBuilder<> &builder, llvm::Value *ptls, llvm::MDNode *tbaa, bool final = false)
 {
     using namespace llvm;
     llvm::Value *signal_page = get_current_signal_page_from_ptls(builder, ptls, tbaa);
@@ -242,19 +242,25 @@ static inline void emit_gc_safepoint(llvm::IRBuilder<> &builder, llvm::Value *pt
     Module *M = builder.GetInsertBlock()->getModule();
     LLVMContext &C = builder.getContext();
     // inline jlsafepoint_func->realize(M)
-    Function *F = M->getFunction("julia.safepoint");
-    if (!F) {
+    if (final) {
         auto T_size = getSizeTy(builder.getContext());
-        auto T_psize = T_size->getPointerTo();
-        FunctionType *FT = FunctionType::get(Type::getVoidTy(C), {T_psize}, false);
-        F = Function::Create(FT, Function::ExternalLinkage, "julia.safepoint", M);
-        F->addFnAttr(Attribute::InaccessibleMemOrArgMemOnly);
+        builder.CreateLoad(T_size, signal_page, true);
     }
-    builder.CreateCall(F, {signal_page});
+    else {
+        Function *F = M->getFunction("julia.safepoint");
+        if (!F) {
+            auto T_size = getSizeTy(builder.getContext());
+            auto T_psize = T_size->getPointerTo();
+            FunctionType *FT = FunctionType::get(Type::getVoidTy(C), {T_psize}, false);
+            F = Function::Create(FT, Function::ExternalLinkage, "julia.safepoint", M);
+            F->addFnAttr(Attribute::InaccessibleMemOrArgMemOnly);
+        }
+        builder.CreateCall(F, {signal_page});
+    }
     emit_signal_fence(builder);
 }
 
-static inline llvm::Value *emit_gc_state_set(llvm::IRBuilder<> &builder, llvm::Value *ptls, llvm::Value *state, llvm::Value *old_state)
+static inline llvm::Value *emit_gc_state_set(llvm::IRBuilder<> &builder, llvm::Value *ptls, llvm::Value *state, llvm::Value *old_state, bool final)
 {
     using namespace llvm;
     Type *T_int8 = state->getType();
@@ -280,38 +286,38 @@ static inline llvm::Value *emit_gc_state_set(llvm::IRBuilder<> &builder, llvm::V
                          passBB, exitBB);
     builder.SetInsertPoint(passBB);
     MDNode *tbaa = get_tbaa_const(builder.getContext());
-    emit_gc_safepoint(builder, ptls, tbaa);
+    emit_gc_safepoint(builder, ptls, tbaa, final);
     builder.CreateBr(exitBB);
     builder.SetInsertPoint(exitBB);
     return old_state;
 }
 
-static inline llvm::Value *emit_gc_unsafe_enter(llvm::IRBuilder<> &builder, llvm::Value *ptls)
+static inline llvm::Value *emit_gc_unsafe_enter(llvm::IRBuilder<> &builder, llvm::Value *ptls, bool final)
 {
     using namespace llvm;
     Value *state = builder.getInt8(0);
-    return emit_gc_state_set(builder, ptls, state, nullptr);
+    return emit_gc_state_set(builder, ptls, state, nullptr, final);
 }
 
-static inline llvm::Value *emit_gc_unsafe_leave(llvm::IRBuilder<> &builder, llvm::Value *ptls, llvm::Value *state)
+static inline llvm::Value *emit_gc_unsafe_leave(llvm::IRBuilder<> &builder, llvm::Value *ptls, llvm::Value *state, bool final)
 {
     using namespace llvm;
     Value *old_state = builder.getInt8(0);
-    return emit_gc_state_set(builder, ptls, state, old_state);
+    return emit_gc_state_set(builder, ptls, state, old_state, final);
 }
 
-static inline llvm::Value *emit_gc_safe_enter(llvm::IRBuilder<> &builder, llvm::Value *ptls)
+static inline llvm::Value *emit_gc_safe_enter(llvm::IRBuilder<> &builder, llvm::Value *ptls, bool final)
 {
     using namespace llvm;
     Value *state = builder.getInt8(JL_GC_STATE_SAFE);
-    return emit_gc_state_set(builder, ptls, state, nullptr);
+    return emit_gc_state_set(builder, ptls, state, nullptr, final);
 }
 
-static inline llvm::Value *emit_gc_safe_leave(llvm::IRBuilder<> &builder, llvm::Value *ptls, llvm::Value *state)
+static inline llvm::Value *emit_gc_safe_leave(llvm::IRBuilder<> &builder, llvm::Value *ptls, llvm::Value *state, bool final)
 {
     using namespace llvm;
     Value *old_state = builder.getInt8(JL_GC_STATE_SAFE);
-    return emit_gc_state_set(builder, ptls, state, old_state);
+    return emit_gc_state_set(builder, ptls, state, old_state, final);
 }
 
 // Compatibility shims for LLVM attribute APIs that were renamed in LLVM 14.
